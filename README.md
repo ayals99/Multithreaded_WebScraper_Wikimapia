@@ -16,4 +16,4 @@ The program splits the workload into five threads where each thread gets a count
 Scraping:
 The Wikimapia website is organized by Country, District and then City.
 Inside a City's webpage there can many subpages, each one holding up to 50 links to Geographocal sites.
-The program can scroll through all thos subpages, enter every link and extract data about the Geographical Site.
+The program can scroll through all those subpages, enter every link they old and extract data about the Geographical Site (in this case Latitide and Longitude).
