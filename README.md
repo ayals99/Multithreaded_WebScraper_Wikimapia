@@ -4,6 +4,7 @@ A multithreaded Web scraper I wrote in Python, using the BeautifulSoup and reque
 Result:
 For each Geographical site in a Country on Wikimapia, this program gets the sites coordintaes in decimal format.
 The final result is a JSON file, organized by:
+
 {'Country Name' : {'District'  : {'City' : { "Geographical Site" : {'Latitude', 'Longitude'} } } } }
 
 HTTP Connection:
