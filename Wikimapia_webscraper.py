@@ -2,14 +2,13 @@ import re
 import time
 import random
 import json
-import pprint
-import unicodedata
+
+from threading import Lock 
 from sys import exit
 
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
-
 from concurrent.futures import ThreadPoolExecutor
 
 from bs4 import BeautifulSoup
@@ -17,7 +16,6 @@ from bs4 import SoupStrainer
 
 
 baseURL = 'https://wikimapia.org/country/'
-IsraelSuffix = 'Israel/'
 
 entriesPerPage = 50
 
@@ -42,6 +40,11 @@ headers = {
 
 # soupStrainer object, so we don't have to read the whole HTML file:
 parseList = SoupStrainer('div', class_='row-fluid')
+
+
+
+
+
 
 #Start of function implementation:
 
@@ -94,6 +97,7 @@ def parseCoordinates(coordinatesStr:str) -> dict:
         longitude = longitudeDegrees + longituteMinutes / 60 + longituteSeconds / 3600
         if longituteDirection == 'W':
             longitude *= -1
+        
         coordinatesDict['Longitude'] = latitude
         coordinatesDict['Latitude'] = longitude
     return coordinatesDict
@@ -115,7 +119,8 @@ def fillGeoSiteData(geoSiteURL : str ,siteDict : dict):
         
         coordinateList = CoordinatesString.split(':') # remove the "Coordinates:" prefix from the string
         coordinates = parseCoordinates(coordinateList[1])
-        siteDict['Coordinates'] = coordinates
+        with lock:
+            siteDict['Coordinates'] = coordinates
 
 def fillCitySubpageDict(citySubpageURL : str, cityDict: dict):
     citySubpage = getFromURL(citySubpageURL)
@@ -126,7 +131,8 @@ def fillCitySubpageDict(citySubpageURL : str, cityDict: dict):
         geoSiteName = geoSite.text.strip()
         if geoSiteName == 'map':
             continue
-        cityDict[geoSiteName] = {}
+        with lock:
+            cityDict[geoSiteName] = {}
         fillGeoSiteData(geoSite['href'], cityDict[geoSiteName])
 
 def findAmountOfSubpages(cityFirstPageSoup) -> int:
@@ -139,7 +145,6 @@ def findAmountOfSubpages(cityFirstPageSoup) -> int:
                 amountOfSubpages = max(amountOfSubpages, int(link.text.strip()))
     return amountOfSubpages
         
-
 def fillCityDict(cityURL : str, cityDict : dict):
     cityPage = getFromURL(cityURL)
     cityFirstPageSoup = BeautifulSoup(cityPage.content,'lxml')
@@ -158,7 +163,8 @@ def fillDistrictDict(districtURL : str, districtDict : dict):
         cityName = cityLinkSuffix.text.strip()
         if cityName == 'map':
             continue
-        districtDict[cityName] = {} # initialize dict for city in district
+        with lock:
+            districtDict[cityName] = {} # initialize dict for city in district
         fillCityDict(districtURL + cityLinkSuffix['href'], districtDict[cityName])
 
 # takes a dictionary of a specitic country as an argument and fills it with all districts:
@@ -168,37 +174,34 @@ def fillCountryDict(countryURL : str, countryDict: dict):
     countrySoup = BeautifulSoup(countryPage.content,'lxml', parse_only=parseList)
     for districtLinkSuffix in countrySoup.find_all('a', href=True):
         districtName = districtLinkSuffix.text.strip()
-        countryDict[districtName] = {} # initialize a dict for a district
+        with lock:
+            countryDict[districtName] = {} # initialize a dict for a district
         fillDistrictDict(countryURL + districtLinkSuffix['href'], countryDict[districtName])
 
 # End of helper function implementations
 
+
+
+
 # Start of usage - main:
 def main():
     MapDatabase = {}
-    # allCountriesPage = getFromURL(baseURL) # NOTE: can go through all countries by uncommenting this line and commenting next line:
-    allCountriesPage = getFromURL(baseURL + IsraelSuffix)
-
+    allCountriesPage = getFromURL(baseURL)
     allCountriesSoup = BeautifulSoup(allCountriesPage.content,'lxml', parse_only=parseList)
 
     with ThreadPoolExecutor(max_workers=5) as executor:
-
-    # NOTE: If we would want to go through all countries we can uncomment:
-        # for countryLinkSuffix in allCountriesSoup.find_all('a', href=True):
-        #     countryName = countryLinkSuffix.text.strip()
-        #     countryLink = baseURL + countryLinkSuffix['href'] # NOTE: can go through all countries by uncommenting this line and commenting next line:
-
-        countryName = 'Israel'
-        countryLink = baseURL + IsraelSuffix
-        
-        MapDatabase[countryName] = {} # initialize a dict for the country
-        executor.submit(fillCountryDict, countryLink , MapDatabase[countryName])
+        for countryLinkSuffix in allCountriesSoup.find_all('a', href=True):
+            countryName = countryLinkSuffix.text.strip()
+            countryLink = baseURL + countryLinkSuffix['href'] # NOTE: can go through all countries by uncommenting this line and commenting next line:
+            with lock:
+                MapDatabase[countryName] = {} # initialize a dict for the country
+            executor.submit(fillCountryDict, countryLink , MapDatabase[countryName])
 
     with open('CountryDatabase.json', 'w') as db:
         json.dump(MapDatabase, db)
 
-    pprint.pprint(MapDatabase)
     print("JSON file created succesfully")
 
 if __name__ == '__main__':
+    lock = Lock()
     main()
