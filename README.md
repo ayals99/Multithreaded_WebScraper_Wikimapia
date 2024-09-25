@@ -11,7 +11,7 @@ HTTP Connection:
 In order to not get banned from the site, the program rotates between different User Agents for each request and waits a random amount of time after a request.
 
 Threads:
-The program splits the workload into five threads where each thread gets a country to scrape, since this the work is I/O intensive.
+The program splits the workload into five threads where each thread gets a country to scrape, since the work is I/O intensive.
 
 Scraping:
 The Wikimapia website is organized by Country, District and then City.
