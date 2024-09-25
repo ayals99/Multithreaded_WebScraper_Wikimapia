@@ -1,8 +1,8 @@
+# All Imports:
 import re
-import time
 import random
 import json
-
+import logging
 from threading import Lock 
 from sys import exit
 
@@ -15,10 +15,17 @@ from bs4 import BeautifulSoup
 from bs4 import SoupStrainer
 
 
+# Global Variables:
 baseURL = 'https://wikimapia.org/country/'
+
+ErrorDuringOperation = False
 
 entriesPerPage = 50
 
+# soupStrainer object, so we don't have to read the whole HTML file:
+parseList = SoupStrainer('div', class_='row-fluid')
+
+# HTTP Connection Variables:
 retryRule = Retry(total = 3,
                   backoff_factor = 2)
 session = requests.Session()
@@ -38,32 +45,38 @@ headers = {
     'Accept-Language': 'en-US,en;q=0.5'
 }
 
-# soupStrainer object, so we don't have to read the whole HTML file:
-parseList = SoupStrainer('div', class_='row-fluid')
 
 
 
 
 
 
-#Start of function implementation:
 
-# will try to connect to the URL up to three times with different IP addresses:
+# Start of function implementation:
+
+# getFromURL will try to connect to the URL up to three times with different IP addresses:
 def getFromURL(URL : str):
     try:
         allCountriesPage = session.get(URL, headers=headers, timeout=5)
         allCountriesPage.raise_for_status()
-        time.sleep(random.randrange(3)) # sleep to avoid being blocked
+        # time.sleep(random.randrange(3)) # sleep to avoid being blocked
     except requests.exceptions.Timeout:
-        exit("Request timed out")
+        log.critical("CRITICAL ERROR: Request timed out")
+        ErrorDuringOperation = True
+        return None
     except requests.exceptions.HTTPError as err:
-        exit("HTTP error")
+        log.critical("CRITICAL ERROR: HTTP error")
+        ErrorDuringOperation = True
+        return None
     except requests.exceptions.RequestException as err:
-        exit("HTTP error")
+        log.critical("CRITICAL ERROR: Requests Exception")
+        ErrorDuringOperation = True
+        return None
     else:
+        log.info("Successfully got page from %s", URL)
         return allCountriesPage
 
-# Description:
+# Description - parseCoordinates:
 #   Takes a dictionary of a city as an argument
 #   Fills it with all geographical sites in city
 #   For each site name we associate a list in the dictionary with
@@ -85,25 +98,31 @@ def parseCoordinates(coordinatesStr:str) -> dict:
         
         # Extract longitude components
         longitudeDegrees = int(match.group(5))
-        longituteMinutes = int(match.group(6))
-        longituteSeconds = int(match.group(7))
-        longituteDirection = match.group(8)
+        longitudeMinutes = int(match.group(6))
+        longitudeSeconds = int(match.group(7))
+        longitudeDirection = match.group(8)
 
         # Convert to decimal degrees
         latitude = latitudeDegrees + latitudeMinutes / 60 + latitudeSeconds / 3600
         if latitudeDirection == 'S':
             latitude *= -1
 
-        longitude = longitudeDegrees + longituteMinutes / 60 + longituteSeconds / 3600
-        if longituteDirection == 'W':
+        longitude = longitudeDegrees + longitudeMinutes / 60 + longitudeSeconds / 3600
+        if longitudeDirection == 'W':
             longitude *= -1
         
         coordinatesDict['Longitude'] = latitude
         coordinatesDict['Latitude'] = longitude
     return coordinatesDict
 
-def fillGeoSiteData(geoSiteURL : str ,siteDict : dict):
+# Description - fillGeoSiteData:
+#       1. Receives URL of Geographical site
+#       2. Extracts the site's coordinates
+#       3. Stores coordinates them in siteDict['Coordinates']
+def fillGeoSiteData(geoSiteURL : str, siteDict : dict):
     page = getFromURL(geoSiteURL)
+    if (page is None):
+        return
     geoSiteSoup = BeautifulSoup(page.content,'lxml')
     NearCitiesAndCoordiantes = geoSiteSoup.find_all('b')
 
@@ -120,10 +139,13 @@ def fillGeoSiteData(geoSiteURL : str ,siteDict : dict):
         coordinateList = CoordinatesString.split(':') # remove the "Coordinates:" prefix from the string
         coordinates = parseCoordinates(coordinateList[1])
         with lock:
+            log.info('parsed coordinates from %s', geoSiteURL)
             siteDict['Coordinates'] = coordinates
 
 def fillCitySubpageDict(citySubpageURL : str, cityDict: dict):
     citySubpage = getFromURL(citySubpageURL)
+    if (citySubpage is None):
+        return
     citySubpageSoup = BeautifulSoup(citySubpage.content,'lxml')
     pageContent = citySubpageSoup.find('div',id='page-content')
     siteBox = pageContent.find('div', class_='row-fluid')
@@ -144,20 +166,30 @@ def findAmountOfSubpages(cityFirstPageSoup) -> int:
             if link.text.strip().isdigit():
                 amountOfSubpages = max(amountOfSubpages, int(link.text.strip()))
     return amountOfSubpages
-        
+
 def fillCityDict(cityURL : str, cityDict : dict):
+    log.info('started scannig City at %s', cityURL)
+
     cityPage = getFromURL(cityURL)
+    if(cityPage is None):
+        return
     cityFirstPageSoup = BeautifulSoup(cityPage.content,'lxml')
     amountOfSubpages = findAmountOfSubpages(cityFirstPageSoup)
+    
     for pageNumber in range(0, amountOfSubpages - 1):
         offset = str(entriesPerPage * pageNumber) + '/'
         fillCitySubpageDict(cityURL + offset, cityDict)
         
-# takes a dictionary of a specific district inside a country as an argument
-# and fills it with all the cities in that district:
+# Description - fillDistrictDict
+#       Takes a dictionary of a specific district inside a country as an argument
+#       and fills it with an entry for each city in that district:
 def fillDistrictDict(districtURL : str, districtDict : dict):
+    log.info('started scannig District at %s', districtURL)
+        
     districtPage = getFromURL(districtURL)
-    time.sleep(random.randrange(7)) # sleep to avoid being blocked
+    if districtPage is None:
+        return
+    # time.sleep(random.randrange(7)) # sleep to avoid being blocked
     districtAndStateSoup = BeautifulSoup(districtPage.content,'lxml', parse_only=parseList)
     for cityLinkSuffix in districtAndStateSoup.find_all('a', href=True):
         cityName = cityLinkSuffix.text.strip()
@@ -169,8 +201,12 @@ def fillDistrictDict(districtURL : str, districtDict : dict):
 
 # takes a dictionary of a specitic country as an argument and fills it with all districts:
 def fillCountryDict(countryURL : str, countryDict: dict):
+    log.info('started scanning country at %s', countryURL)
+    
     countryPage = getFromURL(countryURL)
-    time.sleep(random.randrange(5)) # sleep to avoid being blocked
+    if countryPage is None:
+        return
+    # time.sleep(random.randrange(5)) # sleep to avoid being blocked
     countrySoup = BeautifulSoup(countryPage.content,'lxml', parse_only=parseList)
     for districtLinkSuffix in countrySoup.find_all('a', href=True):
         districtName = districtLinkSuffix.text.strip()
@@ -182,26 +218,39 @@ def fillCountryDict(countryURL : str, countryDict: dict):
 
 
 
+def threadSafeFillCountryDict(countryLink, countryName, MapDatabase):
+    with lock:
+        MapDatabase[countryName] = {}  # Initialize a dict for the country
+    fillCountryDict(countryLink, MapDatabase[countryName])
 
 # Start of usage - main:
 def main():
+    log.info('Started main()')
+
     MapDatabase = {}
     allCountriesPage = getFromURL(baseURL)
+    if allCountriesPage is None:
+        return
     allCountriesSoup = BeautifulSoup(allCountriesPage.content,'lxml', parse_only=parseList)
-
     with ThreadPoolExecutor(max_workers=5) as executor:
+        print("Starting to parse all coordinates in", baseURL)
         for countryLinkSuffix in allCountriesSoup.find_all('a', href=True):
             countryName = countryLinkSuffix.text.strip()
             countryLink = baseURL + countryLinkSuffix['href'] # NOTE: can go through all countries by uncommenting this line and commenting next line:
-            with lock:
-                MapDatabase[countryName] = {} # initialize a dict for the country
-            executor.submit(fillCountryDict, countryLink , MapDatabase[countryName])
+            executor.submit(threadSafeFillCountryDict, countryLink, countryName, MapDatabase)
 
     with open('CountryDatabase.json', 'w') as db:
         json.dump(MapDatabase, db)
 
-    print("JSON file created succesfully")
+    if ErrorDuringOperation:
+        print('JSON file creater with ERRORS')
+    else:
+        print("JSON file created successfully with Coordinates")
 
 if __name__ == '__main__':
     lock = Lock()
+    logging.basicConfig(format='%(asctime)s: %(message)s',
+                    filemode='w',filename='webScraperLog.log',
+                    encoding='utf-8', level=logging.INFO)
+    log = logging.getLogger('webScraperLogger')
     main()
